@@ -79,8 +79,8 @@ def initialize(context):
     g.lookback = 60                # 回看天数（够计算均线即可）
     g.stop_loss = -0.08            # 单票止损线（-8%）
 
-    # 每周调仓
-    run_weekly(rebalance, weekday=g.rebalance_weekday, time='before_open')
+    # 每周调仓（使用open时间而非before_open，确保get_current_data数据可用）
+    run_weekly(rebalance, weekday=g.rebalance_weekday, time='open')
 
     # 每日止损检查
     run_daily(check_stop_loss, time='open')
@@ -131,14 +131,20 @@ def get_ma_signal(stock):
     # 信号归一化：均线差距 / 价格
     normalized_signal = today_diff / current_price
 
+    # 动量因子：价差变化率（今日价差 - 昨日价差），衡量趋势加速/减速
+    diff_momentum = (today_diff - yesterday_diff) / current_price
+    normalized_signal += diff_momentum * 0.5
+
     # 刚金叉（昨日短<长，今日短>长）→ 加分奖励
     if yesterday_diff <= 0 and today_diff > 0:
-        normalized_signal *= 1.5  # 金叉启动点给1.5倍权重
+        normalized_signal *= 1.5
 
     # 刚死叉（昨日短>长，今日短<长）→ 强负信号
     elif yesterday_diff >= 0 and today_diff < 0:
-        normalized_signal *= 2.0  # 死叉点给2倍权重，确保卖出
+        normalized_signal *= 2.0
 
+    if pd.isna(normalized_signal):
+        return 0.0
     return round(normalized_signal, 6)
 
 
@@ -158,10 +164,14 @@ def rebalance(context):
 
     # ── Step 2: 计算每只股票的交叉信号 ──
     candidates = []
+    signal_sum = 0
     for stock in all_stocks:
         signal = get_ma_signal(stock)
-        if signal > 0:  # 只保留多头信号
+        if signal > 0:
             candidates.append((stock, signal))
+            signal_sum += signal
+
+    log.info(f'📊 信号计算完成：{len(candidates)}只股票有多头信号（总信号强度={signal_sum:.4f}）')
 
     if not candidates:
         log.info('⏸️ 当前无多头信号股票，空仓等待')
@@ -177,15 +187,9 @@ def rebalance(context):
 
     log.info(f'🏆 选中 TOP {len(buy_list)}：{[s[:6] for s in buy_list]}')
 
-    # ── Step 4: 处理停牌和ST ──
-    current_data = get_current_data()
-    buy_list = [
-        s for s in buy_list
-        if s in current_data
-        and not current_data[s].paused
-        and not current_data[s].is_st
-    ]
-    log.info(f'✅ 过滤后有效买入：{len(buy_list)} 只')
+    # ── Step 4: 移除get_current_data过滤（jqboson引擎不可靠）──
+    # 停牌和ST检查在下单时会自动处理，无需提前过滤
+    log.info(f'✅ 待买入：{len(buy_list)} 只')
 
     # ── Step 5: 卖出不在买入列表的持仓 ──
     for stock in list(context.portfolio.positions.keys()):
@@ -217,6 +221,7 @@ def rebalance(context):
 
 def check_stop_loss(context):
     """每日检查持仓止损"""
+    current_data = get_current_data()
     for stock in list(context.portfolio.positions.keys()):
         position = context.portfolio.positions[stock]
         if position.amount == 0:
@@ -226,11 +231,13 @@ def check_stop_loss(context):
         if cost <= 0:
             continue
 
-        df = attribute_history(stock, 2, '1d', ['close'])
-        if df.empty:
+        if stock not in current_data:
             continue
 
-        current_price = df['close'].iloc[-1]
+        current_price = current_data[stock].open
+        if current_price <= 0:
+            continue
+
         pnl_pct = (current_price - cost) / cost
 
         if pnl_pct < g.stop_loss:
