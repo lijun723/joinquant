@@ -47,26 +47,22 @@ def get_forward_return(stock, date, days=FORWARD_DAYS):
     计算某只股票在指定日期后的 N 日收益。
     返回：收益率（小数），或 NaN（如果数据不足）
     """
-    start_price_df = get_price(stock, start_date=date, end_date=date,
-                               frequency='daily', fields=['close'], skip_paused=True)
-    if start_price_df.empty:
+    end_dt = date + timedelta(days=int(days * 1.5))
+    df = get_price(stock, start_date=date, end_date=end_dt,
+                   frequency='daily', fields=['close'], skip_paused=True)
+
+    if df.empty or len(df) < 2:
         return np.nan
 
-    start_price = start_price_df['close'].iloc[0]
-
-    # 获取 future_date 的收盘价
-    end_dt = date + timedelta(days=int(days * 1.5))  # 给足够缓冲
-    end_price_df = get_price(stock, start_date=date, end_date=end_dt,
-                             frequency='daily', fields=['close'], skip_paused=True)
-
-    if end_price_df.empty or len(end_price_df) < 2:
+    if df.index[0].date() != date:
         return np.nan
 
-    # 取至少 days 个交易日后的价格
-    if len(end_price_df) > days:
-        end_price = end_price_df['close'].iloc[days]
+    start_price = df['close'].iloc[0]
+
+    if len(df) > days:
+        end_price = df['close'].iloc[days]
     else:
-        end_price = end_price_df['close'].iloc[-1]
+        end_price = df['close'].iloc[-1]
 
     if start_price <= 0 or end_price <= 0:
         return np.nan
@@ -198,12 +194,13 @@ def compute_ic_at_date(date):
     }
 
     for label, col in factors.items():
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['fwd_return'] = pd.to_numeric(df['fwd_return'], errors='coerce')
         valid = df[[col, 'fwd_return']].dropna()
         if len(valid) < 20:
             results[label] = np.nan
             continue
 
-        # Spearman 秩相关系数（比 Pearson 更稳健）
         from scipy.stats import spearmanr
         rho, p_value = spearmanr(valid[col], valid['fwd_return'])
         results[label] = rho
@@ -328,6 +325,8 @@ print("=" * 65)
 
 df_ic = pd.DataFrame(ic_records).set_index('date')
 factor_names = ['PE', 'PB', 'ROE', '换手率']
+for f in factor_names:
+    df_ic[f] = pd.to_numeric(df_ic[f], errors='coerce')
 
 for factor in factor_names:
     series = df_ic[factor].dropna()
