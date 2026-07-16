@@ -131,21 +131,24 @@ def compute_turnover(stock, date, lookback=20):
     get_price 获取的 turn 字段是当日换手率(%)
     """
     try:
-        start_dt = date - timedelta(days=int(lookback * 2.0))
+        start_dt = date - timedelta(days=int(lookback * 2.5))
         df = get_price(stock, start_date=start_dt, end_date=date,
                        frequency='daily', fields=['turn'], skip_paused=False)
         
-        if df.empty or len(df) < 3:
+        if df.empty:
+            return np.nan
+        
+        if len(df) < 3:
             return np.nan
         
         df['turn'] = df['turn'].fillna(method='ffill')
         valid_turn = df['turn'].dropna()
         
-        if len(valid_turn) < 3:
+        if len(valid_turn) < 2:
             return np.nan
         
         avg_turn = valid_turn.mean()
-        if avg_turn is None or np.isnan(avg_turn):
+        if avg_turn is None or np.isnan(avg_turn) or avg_turn <= 0:
             return np.nan
         return avg_turn
     except Exception:
@@ -171,14 +174,24 @@ def compute_ic_at_date(date):
         stocks = stocks[:300]
 
     data_rows = []
+    stats = {'total': 0, 'fwd_ret_valid': 0, 'turnover_valid': 0, 'both_valid': 0}
+    
     for stock in stocks:
+        stats['total'] += 1
         pe = compute_pe(stock, date)
         pb = compute_pb(stock, date)
         roe = compute_roe(stock, date)
         turnover = compute_turnover(stock, date)
         fwd_ret = get_forward_return(stock, date)
 
+        if not np.isnan(fwd_ret):
+            stats['fwd_ret_valid'] += 1
+        if not np.isnan(turnover):
+            stats['turnover_valid'] += 1
         if not np.isnan(fwd_ret) and not np.isnan(turnover):
+            stats['both_valid'] += 1
+
+        if not np.isnan(fwd_ret):
             data_rows.append({
                 'stock': stock,
                 'pe': pe,
@@ -189,6 +202,7 @@ def compute_ic_at_date(date):
             })
 
     if len(data_rows) < 30:
+        print(f"   ⚠️ {date}: 有效股票{len(data_rows)}/300，fwd_ret有效{stats['fwd_ret_valid']}，turnover有效{stats['turnover_valid']}")
         return None
 
     df = pd.DataFrame(data_rows)
@@ -260,8 +274,7 @@ def compute_factor_group_returns(date):
         turnover = compute_turnover(stock, date)
         fwd_ret = get_forward_return(stock, date)
 
-        if not np.isnan(fwd_ret) and not np.isnan(pe) and not np.isnan(pb) \
-                and not np.isnan(roe) and not np.isnan(turnover):
+        if not np.isnan(fwd_ret):
             data_rows.append({
                 'stock': stock,
                 'pe': pe,
