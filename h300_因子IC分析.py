@@ -326,6 +326,14 @@ for i, date in enumerate(test_dates):
 
 print(f"\n✅ IC 计算完成，有效样本 {len(ic_records)} 期")
 
+if not ic_records:
+    print("\n❌ 所有日期的IC计算均失败，无法进行后续分析")
+    print("   可能原因：")
+    print("   1. 日期范围太窄，没有足够的测试时间点")
+    print("   2. 因子数据获取失败（如财务数据未更新）")
+    print("   3. 股票数量不足（少于30只）")
+    exit()
+
 # --- IC 统计分析 ---
 print("\n" + "=" * 65)
 print("  📊 IC 分析报告")
