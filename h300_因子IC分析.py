@@ -131,12 +131,20 @@ def compute_turnover(stock, date, lookback=20):
     get_price 获取的 turn 字段是当日换手率(%)
     """
     try:
-        start_date = date - timedelta(days=int(lookback * 1.5))
-        df = get_price(stock, start_date=start_date, end_date=date,
-                       frequency='daily', fields=['turn'], skip_paused=True)
-        if df.empty or len(df) < 5:
+        start_dt = date - timedelta(days=int(lookback * 2.0))
+        df = get_price(stock, start_date=start_dt, end_date=date,
+                       frequency='daily', fields=['turn'], skip_paused=False)
+        
+        if df.empty or len(df) < 3:
             return np.nan
-        avg_turn = df['turn'].mean()
+        
+        df['turn'] = df['turn'].fillna(method='ffill')
+        valid_turn = df['turn'].dropna()
+        
+        if len(valid_turn) < 3:
+            return np.nan
+        
+        avg_turn = valid_turn.mean()
         if avg_turn is None or np.isnan(avg_turn):
             return np.nan
         return avg_turn
@@ -170,7 +178,7 @@ def compute_ic_at_date(date):
         turnover = compute_turnover(stock, date)
         fwd_ret = get_forward_return(stock, date)
 
-        if not np.isnan(fwd_ret):
+        if not np.isnan(fwd_ret) and not np.isnan(turnover):
             data_rows.append({
                 'stock': stock,
                 'pe': pe,
@@ -354,61 +362,80 @@ for factor in factor_names:
     print(f"  └{'─' * 22}┘")
 
 # --- 因子 IC 时序折线图 ---
-fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
-fig.suptitle(f'沪深300 因子 IC 时序 ({START_DATE} — {END_DATE})', fontsize=14)
+valid_factors_for_plot = [(f, c) for f, c in zip(factor_names, ['#E74C3C', '#3498DB', '#27AE60', '#F39C12']) 
+                         if len(df_ic[f].dropna()) >= 3]
 
-colors = ['#E74C3C', '#3498DB', '#27AE60', '#F39C12']
-for idx, factor in enumerate(factor_names):
-    ax = axes[idx]
-    series = df_ic[factor].dropna()
-    ax.plot(series.index, series.values, color=colors[idx], linewidth=0.8,
-            marker='o', markersize=2, alpha=0.7)
-    ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.5)
-    ax.axhline(y=series.mean(), color=colors[idx], linestyle='-',
-               linewidth=1.5, label=f'均值 {series.mean():+.4f}')
-    ax.fill_between(series.index, series.values, 0,
-                    where=(series.values > 0),
-                    color='red', alpha=0.15)
-    ax.fill_between(series.index, series.values, 0,
-                    where=(series.values < 0),
-                    color='green', alpha=0.15)
-    ax.set_ylabel(f'{factor} IC')
-    ax.legend(fontsize=9, loc='upper left')
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(-0.6, 0.6)
+if valid_factors_for_plot:
+    num_plots = len(valid_factors_for_plot)
+    fig, axes = plt.subplots(num_plots, 1, figsize=(14, 4*num_plots), sharex=True)
+    if num_plots == 1:
+        axes = [axes]
+    fig.suptitle(f'沪深300 因子 IC 时序 ({START_DATE} — {END_DATE})', fontsize=14)
 
-axes[-1].set_xlabel('日期')
-plt.tight_layout()
-plt.show()
+    for idx, (factor, color) in enumerate(valid_factors_for_plot):
+        ax = axes[idx]
+        series = df_ic[factor].dropna()
+        ax.plot(series.index, series.values, color=color, linewidth=0.8,
+                marker='o', markersize=2, alpha=0.7)
+        ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.5)
+        ax.axhline(y=series.mean(), color=color, linestyle='-',
+                   linewidth=1.5, label=f'均值 {series.mean():+.4f}')
+        ax.fill_between(series.index, series.values, 0,
+                        where=(series.values > 0),
+                        color='red', alpha=0.15)
+        ax.fill_between(series.index, series.values, 0,
+                        where=(series.values < 0),
+                        color='green', alpha=0.15)
+        ax.set_ylabel(f'{factor} IC')
+        ax.legend(fontsize=9, loc='upper left')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(-0.6, 0.6)
+
+    axes[-1].set_xlabel('日期')
+    plt.tight_layout()
+    plt.show()
+else:
+    print("  ❌ 所有因子IC数据均不足，跳过时序折线图")
 
 # --- 因子 IC 箱线图 ---
-fig, ax = plt.subplots(figsize=(10, 6))
-bp_data = [df_ic[f].dropna().values for f in factor_names]
-bp = ax.boxplot(bp_data, labels=factor_names, patch_artist=True,
-                widths=0.5, showmeans=True,
-                meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+valid_factor_names = []
+bp_data = []
+for f in factor_names:
+    values = df_ic[f].dropna().values
+    if len(values) >= 3:
+        valid_factor_names.append(f)
+        bp_data.append(values)
+    else:
+        print(f"  ⚠️ {f} IC数据不足（{len(values)}条），跳过箱线图")
 
-# 着色
-colors_box = ['#E74C3C', '#3498DB', '#27AE60', '#F39C12']
-for patch, color in zip(bp['boxes'], colors_box):
-    patch.set_facecolor(color)
-    patch.set_alpha(0.6)
+if bp_data:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bp = ax.boxplot(bp_data, labels=valid_factor_names, patch_artist=True,
+                    widths=0.5, showmeans=True,
+                    meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
 
-ax.axhline(y=0, color='gray', linestyle='--', linewidth=1)
-ax.set_title('因子 IC 分布箱线图', fontsize=13)
-ax.set_ylabel('IC 值')
-ax.grid(True, alpha=0.2, axis='y')
+    colors_box = ['#E74C3C', '#3498DB', '#27AE60', '#F39C12']
+    for patch, color in zip(bp['boxes'], colors_box[:len(bp_data)]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
 
-# 在箱线上标注均值
-for i, factor in enumerate(factor_names):
-    mean_val = df_ic[factor].mean()
-    ax.annotate(f'{mean_val:+.3f}',
-                xy=(i + 1, mean_val),
-                xytext=(i + 1.3, mean_val + 0.02),
-                fontsize=9, color='darkred')
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=1)
+    ax.set_title('因子 IC 分布箱线图', fontsize=13)
+    ax.set_ylabel('IC 值')
+    ax.grid(True, alpha=0.2, axis='y')
 
-plt.tight_layout()
-plt.show()
+    for i, factor in enumerate(valid_factor_names):
+        mean_val = df_ic[factor].mean()
+        if not np.isnan(mean_val):
+            ax.annotate(f'{mean_val:+.3f}',
+                        xy=(i + 1, mean_val),
+                        xytext=(i + 1.3, mean_val + 0.02),
+                        fontsize=9, color='darkred')
+
+    plt.tight_layout()
+    plt.show()
+else:
+    print("  ❌ 所有因子IC数据均不足，跳过箱线图")
 
 # --- 分层收益回测（多空组合） ---
 print("\n\n⏳ 计算分层收益（5组多空回测）...")
@@ -422,43 +449,45 @@ for i, date in enumerate(test_dates):
         grp['date'] = date
         group_records.append(grp)
 
-print("✅ 分层收益计算完成")
+if not group_records:
+    print("  ❌ 分层收益数据为空，跳过相关分析")
+else:
+    print(f"✅ 分层收益计算完成（{len(group_records)}期有效数据）")
 
 # --- 分层收益分析 ---
-print("\n" + "=" * 65)
-print("  📊 分层收益分析（多空组合模拟）")
-print("=" * 65)
+if not group_records:
+    pass
+else:
+    print("\n" + "=" * 65)
+    print("  📊 分层收益分析（多空组合模拟）")
+    print("=" * 65)
 
-for factor in factor_names:
-    print(f"\n  ┌─ {factor} ─ 五组未来20日平均收益")
-    # 收集所有期的分组收益
-    group_data = {f'G{i}': [] for i in range(1, 6)}
-    group_data['G5(高)'] = group_data.pop('G5') if 'G5' in group_data else []
+    for factor in factor_names:
+        print(f"\n  ┌─ {factor} ─ 五组未来20日平均收益")
+        all_g1 = []
+        all_g5 = []
+        for rec in group_records:
+            if factor not in rec or rec[factor] is None:
+                continue
+            for g_label, g_val in rec[factor].items():
+                if 'G1' in str(g_label):
+                    all_g1.append(g_val)
+                elif 'G5' in str(g_label):
+                    all_g5.append(g_val)
 
-    all_g1 = []
-    all_g5 = []
-    for rec in group_records:
-        if factor not in rec or rec[factor] is None:
-            continue
-        for g_label, g_val in rec[factor].items():
-            if 'G1' in str(g_label):
-                all_g1.append(g_val)
-            elif 'G5' in str(g_label):
-                all_g5.append(g_val)
-
-    if all_g1 and all_g5:
-        mean_g1 = np.mean(all_g1) * 100
-        mean_g5 = np.mean(all_g5) * 100
-        spread = mean_g1 - mean_g5
-        print(f"  │ G1(低): {mean_g1:+.2f}%  |  G5(高): {mean_g5:+.2f}%")
-        print(f"  │ 多空收益差 (G1-G5): {spread:+.2f}%")
-        if abs(spread) > 1.0:
-            print(f"  │ 解读: {'低值组跑赢' if spread > 0 else '高值组跑赢'}，约 {abs(spread):.1f}%/20日")
+        if all_g1 and all_g5:
+            mean_g1 = np.mean(all_g1) * 100
+            mean_g5 = np.mean(all_g5) * 100
+            spread = mean_g1 - mean_g5
+            print(f"  │ G1(低): {mean_g1:+.2f}%  |  G5(高): {mean_g5:+.2f}%")
+            print(f"  │ 多空收益差 (G1-G5): {spread:+.2f}%")
+            if abs(spread) > 1.0:
+                print(f"  │ 解读: {'低值组跑赢' if spread > 0 else '高值组跑赢'}，约 {abs(spread):.1f}%/20日")
+            else:
+                print(f"  │ 解读: 区分度一般")
         else:
-            print(f"  │ 解读: 区分度一般")
-    else:
-        print(f"  │ 数据不足")
-    print(f"  └{'─' * 22}┘")
+            print(f"  │ 数据不足")
+        print(f"  └{'─' * 22}┘")
 
 
 # --- 汇总排名 ---
