@@ -128,28 +128,40 @@ def compute_roe(stock, date):
 def compute_turnover(stock, date, lookback=20):
     """
     计算换手率均值（过去20日平均换手率）
-    get_price 获取的 turn 字段是当日换手率(%)
+    换手率 = 成交量 / 流通股本 × 100%
     """
     try:
         start_dt = date - timedelta(days=int(lookback * 2.5))
         df = get_price(stock, start_date=start_dt, end_date=date,
-                       frequency='daily', fields=['turn'], skip_paused=False)
+                       frequency='daily', fields=['volume'], skip_paused=False)
         
-        if df.empty:
+        if df.empty or len(df) < 2:
             return np.nan
         
-        if len(df) < 3:
+        df['volume'] = df['volume'].fillna(method='ffill')
+        valid_vol = df['volume'].dropna()
+        
+        if len(valid_vol) < 2:
             return np.nan
         
-        df['turn'] = df['turn'].fillna(method='ffill')
-        valid_turn = df['turn'].dropna()
-        
-        if len(valid_turn) < 2:
+        avg_volume = valid_vol.mean()
+        if avg_volume is None or np.isnan(avg_volume) or avg_volume <= 0:
             return np.nan
         
-        avg_turn = valid_turn.mean()
-        if avg_turn is None or np.isnan(avg_turn) or avg_turn <= 0:
+        q = query(
+            valuation.code, valuation.circulating_cap
+        ).filter(
+            valuation.code == stock
+        )
+        fund_df = get_fundamentals(q, date=date)
+        if fund_df.empty:
             return np.nan
+        
+        circulating_cap = fund_df['circulating_cap'].iloc[0]
+        if circulating_cap is None or np.isnan(circulating_cap) or circulating_cap <= 0:
+            return np.nan
+        
+        avg_turn = (avg_volume / circulating_cap) * 100
         return avg_turn
     except Exception:
         return np.nan
