@@ -187,9 +187,57 @@ def rebalance(context):
 
     log.info(f'🏆 选中 TOP {len(buy_list)}：{[s[:6] for s in buy_list]}')
 
-    # ── Step 4: 移除get_current_data过滤（jqboson引擎不可靠）──
-    # 停牌和ST检查在下单时会自动处理，无需提前过滤
-    log.info(f'✅ 待买入：{len(buy_list)} 只')
+    # ── Step 4: 处理停牌和ST ──
+    current_data = get_current_data()
+    
+    if buy_list:
+        test_stock = buy_list[0]
+        test_result = '访问成功'
+        try:
+            test_data = current_data[test_stock]
+            if test_data:
+                test_result = f'paused={test_data.paused}, is_st={test_data.is_st}'
+            else:
+                test_result = '数据为空'
+        except Exception as e:
+            test_result = f'访问失败({str(e)[:20]})'
+        log.info(f'🔧 current_data类型={type(current_data).__name__}, '
+                 f'测试股票{test_stock[:6]}结果={test_result}')
+    
+    valid_list = []
+    filtered_details = []
+    for s in buy_list:
+        try:
+            stock_data = current_data[s]
+        except Exception as e:
+            filtered_details.append(f'{s[:6]}: 访问失败({str(e)[:20]})')
+            continue
+        
+        if stock_data is None:
+            filtered_details.append(f'{s[:6]}: 数据为空')
+            continue
+        
+        try:
+            is_paused = stock_data.paused
+            is_st = stock_data.is_st
+        except Exception as e:
+            filtered_details.append(f'{s[:6]}: 属性访问失败({str(e)[:20]})')
+            continue
+        
+        if is_paused:
+            filtered_details.append(f'{s[:6]}: 停牌')
+            continue
+        if is_st:
+            filtered_details.append(f'{s[:6]}: ST股')
+            continue
+        
+        valid_list.append(s)
+    
+    if filtered_details:
+        log.info(f'🔍 被过滤的股票：{", ".join(filtered_details)}')
+    
+    buy_list = valid_list
+    log.info(f'✅ 过滤后有效买入：{len(buy_list)} 只')
 
     # ── Step 5: 卖出不在买入列表的持仓 ──
     for stock in list(context.portfolio.positions.keys()):
