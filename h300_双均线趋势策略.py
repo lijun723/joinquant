@@ -79,7 +79,7 @@ def initialize(context):
     g.lookback = 60                # 回看天数（够计算均线即可）
     g.stop_loss = -0.08            # 单票止损线（-8%）
 
-    # 每周调仓（使用open时间而非before_open，确保get_current_data数据可用）
+    # 每周调仓（使用 'open' 而非 'before_open'，确保 get_current_data 能获取有效数据）
     run_weekly(rebalance, weekday=g.rebalance_weekday, time='open')
 
     # 每日止损检查
@@ -154,7 +154,7 @@ def get_ma_signal(stock):
 
 def rebalance(context):
     """定期调仓：选股 → 卖出 → 买入"""
-
+    log.info('开始调仓')
     # ── Step 1: 获取沪深300成分股 ──
     all_stocks = get_index_stocks(g.index_code)
     if not all_stocks:
@@ -221,7 +221,7 @@ def rebalance(context):
 
 def check_stop_loss(context):
     """每日检查持仓止损"""
-    current_data = get_current_data()
+    log.info('每天检查持仓止损')
     for stock in list(context.portfolio.positions.keys()):
         position = context.portfolio.positions[stock]
         if position.amount == 0:
@@ -231,10 +231,7 @@ def check_stop_loss(context):
         if cost <= 0:
             continue
 
-        if stock not in current_data:
-            continue
-
-        current_price = current_data[stock].open
+        current_price = position.price
         if current_price <= 0:
             continue
 
@@ -243,7 +240,7 @@ def check_stop_loss(context):
         if pnl_pct < g.stop_loss:
             order_target(stock, 0)
             log.info(f'🛑 止损 {stock}（亏 {pnl_pct*100:.1f}%）')
-
+    log.info('检查持仓止损完成')
 
 # ═══════════════════════════════════════════════════════════
 # 参数优化建议
