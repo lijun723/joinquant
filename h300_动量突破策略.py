@@ -179,26 +179,67 @@ def rebalance(context):
 
     # ── Step 2: 选出 TOP N ──
     top_stocks_raw = [s[0] for s in scored[:g.top_n]]
-
-    # 过滤停牌和ST
-    current_data = get_current_data()
-    top_stocks = [
-        s for s in top_stocks_raw
-        if s in current_data
-        and not current_data[s].paused
-        and not current_data[s].is_st
-    ]
-
-    log.info(f'🏆 TOP {g.top_n}：{[s[:6] for s in top_stocks]}')
+    log.info(f'🏆 TOP {g.top_n}：{[s[:6] for s in top_stocks_raw]}')
     log.info(f'  动量得分区间：{scored[0][1]:.4f} ~ {scored[min(len(scored), g.top_n)-1][1]:.4f}')
 
-    # ── Step 3: 卖出 ──
+    # ── Step 3: 过滤停牌和ST ──
+    current_data = get_current_data()
+    
+    if top_stocks_raw:
+        test_stock = top_stocks_raw[0]
+        test_result = '访问成功'
+        try:
+            test_data = current_data[test_stock]
+            if test_data:
+                test_result = f'paused={test_data.paused}, is_st={test_data.is_st}'
+            else:
+                test_result = '数据为空'
+        except Exception as e:
+            test_result = f'访问失败({str(e)[:20]})'
+        log.info(f'🔧 current_data类型={type(current_data).__name__}, '
+                 f'测试股票{test_stock[:6]}结果={test_result}')
+    
+    top_stocks = []
+    filtered_details = []
+    for s in top_stocks_raw:
+        try:
+            stock_data = current_data[s]
+        except Exception as e:
+            filtered_details.append(f'{s[:6]}: 访问失败({str(e)[:20]})')
+            continue
+        
+        if stock_data is None:
+            filtered_details.append(f'{s[:6]}: 数据为空')
+            continue
+        
+        try:
+            is_paused = stock_data.paused
+            is_st = stock_data.is_st
+        except Exception as e:
+            filtered_details.append(f'{s[:6]}: 属性访问失败({str(e)[:20]})')
+            continue
+        
+        if is_paused:
+            filtered_details.append(f'{s[:6]}: 停牌')
+            continue
+        if is_st:
+            filtered_details.append(f'{s[:6]}: ST股')
+            continue
+        
+        top_stocks.append(s)
+    
+    if filtered_details:
+        log.info(f'🔍 被过滤的股票：{", ".join(filtered_details)}')
+    
+    log.info(f'✅ 过滤后有效买入：{len(top_stocks)} 只')
+
+    # ── Step 4: 卖出 ──
     for stock in list(context.portfolio.positions.keys()):
         if stock not in top_stocks and context.portfolio.positions[stock].amount > 0:
             order_target(stock, 0)
             log.info(f'📉 卖出 {stock}（排名下降）')
 
-    # ── Step 4: 买入 ──
+    # ── Step 5: 买入 ──
     if not top_stocks:
         return
 
